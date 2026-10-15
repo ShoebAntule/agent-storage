@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {challenges,publicChallenge} from '../server/challenges.mjs';
+import {evaluate,runCases} from '../server/evaluate.mjs';
+test('catalogue has 30 unique versioned tasks and exact duration distribution',()=>{assert.equal(challenges.length,30);assert.equal(new Set(challenges.map(c=>c.id)).size,30);for(const [d,m]of [['easy',10],['medium',20],['hard',30]]){const cs=challenges.filter(c=>c.difficulty===d);assert.equal(cs.length,10);assert.ok(cs.every(c=>c.minutes===m&&c.tests.length>=5));}});
+test('every reference solution passes every authored check',async t=>{for(const c of challenges)await t.test(c.title,async()=>{const r=await evaluate(c,c.reference);assert.equal(r.score,100,JSON.stringify(r));assert.equal(r.passed,true);});});
+test('each broken starter fails at least one check',async()=>{for(const c of challenges){const r=await evaluate(c,c.starter);assert.ok(r.score<100,`${c.id} starter unexpectedly perfect`);}});
+test('public contracts omit tests and reference solutions',()=>{for(const c of challenges){const p=publicChallenge(c);assert.equal(p.tests,undefined);assert.equal(p.reference,undefined);assert.equal(p.examples.length,2);}});
+test('mandatory security gate can fail despite numeric passing score',async()=>{const c={tests:[{name:'core',input:1,expected:1,weight:90},{name:'security',input:2,expected:3,weight:10,critical:true,hidden:true}]};const r=await evaluate(c,'function solve(input){return input;}');assert.equal(r.score,90);assert.equal(r.passed,false);assert.equal(r.securityGatePassed,false);assert.equal(r.checks[1].actual,undefined);});
+test('runtime blocks host access and bounds infinite loops',async()=>{for(const code of ['function solve(){return typeof process+":"+typeof require+":"+typeof fetch;}','function solve(){while(true){}}','function solve(){throw new Error("hidden input");}']){const r=await runCases(code,[{input:null}]);if(code.includes('typeof'))assert.equal(r[0].actual,'undefined:undefined:undefined');else assert.ok(r[0].error);}});
+test('hidden candidate error text does not leak inputs',async()=>{const r=await evaluate({tests:[{input:'secret',expected:'x',weight:1,hidden:true}]},'function solve(input){throw new Error(input);}');assert.ok(!JSON.stringify(r).includes('secret'));});
+test('worker memory exhaustion is contained',async()=>{const r=await runCases('function solve(){let a=[];while(true){a.push("x".repeat(100000));}}',[{input:null}]);assert.ok(r[0].error);});
