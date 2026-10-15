@@ -1,38 +1,40 @@
-# Senior challenge catalogue
+# Project Lab 3
 
-Ten service scenarios, each with three progressive release stages: 30 total projects. Easy is senior foundation; medium adds additional invariants; hard composes the full contract. Each has 40 executable cases (2 visible, 38 hidden), including two workload checks. Hidden data is server-only.
+## easy
 
-| Difficulty | Minutes | Category | Project | Type |
-|---|---:|---|---|---|
-| easy | 10 | Payments & integrity | Multi-tenant checkout transaction · Foundation | extend |
-| medium | 20 | Payments & integrity | Multi-tenant checkout transaction · Advanced | extend |
-| hard | 30 | Payments & integrity | Multi-tenant checkout transaction · Expert | extend |
-| easy | 10 | Authorization & policy | Tenant policy decision service · Foundation | repair |
-| medium | 20 | Authorization & policy | Tenant policy decision service · Advanced | repair |
-| hard | 30 | Authorization & policy | Tenant policy decision service · Expert | repair |
-| easy | 10 | Traffic & resilience | Weighted admission-control gateway · Foundation | extend |
-| medium | 20 | Traffic & resilience | Weighted admission-control gateway · Advanced | extend |
-| hard | 30 | Traffic & resilience | Weighted admission-control gateway · Expert | extend |
-| easy | 10 | Caching & consistency | Expiring multi-tenant LRU cache · Foundation | repair |
-| medium | 20 | Caching & consistency | Expiring multi-tenant LRU cache · Advanced | repair |
-| hard | 30 | Caching & consistency | Expiring multi-tenant LRU cache · Expert | repair |
-| easy | 10 | Traffic & resilience | Health-aware weighted routing · Foundation | repair |
-| medium | 20 | Traffic & resilience | Health-aware weighted routing · Advanced | repair |
-| hard | 30 | Traffic & resilience | Health-aware weighted routing · Expert | repair |
-| easy | 10 | Workflows & scheduling | Resource-constrained release pipeline · Foundation | extend |
-| medium | 20 | Workflows & scheduling | Resource-constrained release pipeline · Advanced | extend |
-| hard | 30 | Workflows & scheduling | Resource-constrained release pipeline · Expert | extend |
-| easy | 10 | Retrieval & AI systems | Tenant-safe retrieval gateway · Foundation | extend |
-| medium | 20 | Retrieval & AI systems | Tenant-safe retrieval gateway · Advanced | extend |
-| hard | 30 | Retrieval & AI systems | Tenant-safe retrieval gateway · Expert | extend |
-| easy | 10 | Transactions & recovery | Expiring inventory reservations · Foundation | repair |
-| medium | 20 | Transactions & recovery | Expiring inventory reservations · Advanced | repair |
-| hard | 30 | Transactions & recovery | Expiring inventory reservations · Expert | repair |
-| easy | 10 | Event processing | Payment journal reconciliation · Foundation | repair |
-| medium | 20 | Event processing | Payment journal reconciliation · Advanced | repair |
-| hard | 30 | Event processing | Payment journal reconciliation · Expert | repair |
-| easy | 10 | Event processing | Versioned audit projection rebuild · Foundation | extend |
-| medium | 20 | Event processing | Versioned audit projection rebuild · Advanced | extend |
-| hard | 30 | Event processing | Versioned audit projection rebuild · Expert | extend |
+- Webhook inbox: replay-safe delivery — Events & integrity; 6 files; 40 cases; 10 minutes
+- Activity feed: stable cursor pages — APIs & pagination; 5 files; 40 cases; 10 minutes
+- Private downloads: grant expiry and revocation — Authorization & policy; 5 files; 40 cases; 10 minutes
+- Invoice totals: integer rounding and tax boundaries — Payments & integrity; 6 files; 40 cases; 10 minutes
+- Wallet transfers: atomic balance updates — Backend & transactions; 6 files; 40 cases; 10 minutes
+- Audit export: recursive secret redaction — Security & privacy; 5 files; 40 cases; 10 minutes
+- Tenant settings: safe layered overrides — Configuration & data; 5 files; 40 cases; 10 minutes
+- Sign-in return paths: canonical redirect validation — Security & URLs; 5 files; 40 cases; 10 minutes
+- Seat picker: accessible bounded reservations — UI & rendering; 9 files; 40 cases; 10 minutes; live preview
+- Approval form: validation and safe confirmation — UI & rendering; 9 files; 40 cases; 10 minutes; live preview
 
-The original catalogue is retained only for historical attempt compatibility. New sessions select from this table, randomly within difficulty/category. Requirements are in the brief and read-only RELEASE.md; incorrect inherited comments must not override them.
+## medium
+
+- Refund reconciliation across partial captures — Payments & integrity; 5 files; 40 cases; 20 minutes
+- Warehouse leases: expiry, renewal and commit — Backend & transactions; 5 files; 40 cases; 20 minutes
+- Retry dispatcher: cancellation and backoff ordering — Jobs & reliability; 5 files; 40 cases; 20 minutes
+- Order projection: version gaps and tombstones — Events & consistency; 5 files; 40 cases; 20 minutes
+- Feature rollouts: targeting and stable bucketing — Configuration & policy; 5 files; 40 cases; 20 minutes
+- Batch loader: positional results and tenant isolation — APIs & performance; 6 files; 40 cases; 20 minutes
+- Tagged query cache: invalidation and stale responses — Caching & consistency; 5 files; 40 cases; 20 minutes
+- Spreadsheet export: quoting and formula injection — Security & integration; 6 files; 40 cases; 20 minutes
+- Search panel: out-of-order responses and focus — UI & rendering; 9 files; 40 cases; 20 minutes; live preview
+- Task board: optimistic moves with rollback — UI & rendering; 9 files; 40 cases; 20 minutes; live preview
+
+## hard
+
+- Telemetry grid: bounded rendering and stable selection — UI & rendering; 9 files; 40 cases; 30 minutes; live preview
+- Offline profile editor: field-level conflict resolution — UI & rendering; 9 files; 40 cases; 30 minutes; live preview
+- Checkout ledger: atomicity, retries and discounts — Payments & integrity; 5 files; 40 cases; 30 minutes
+- Authorization engine: wildcard precedence and expiry — Authorization & policy; 5 files; 40 cases; 30 minutes
+- Admission gateway: weighted quotas and retry identity — Traffic & resilience; 5 files; 40 cases; 30 minutes
+- Tenant LRU cache: expiry, eviction and recency — Caching & consistency; 5 files; 40 cases; 30 minutes
+- Load balancer: weighted routing under capacity pressure — Traffic & resilience; 5 files; 40 cases; 30 minutes
+- Release pipeline: dependencies, cycles and CPU budgets — Workflows & scheduling; 5 files; 40 cases; 30 minutes
+- RAG retrieval: tenant filters, revisions and stable ranking — Retrieval & AI systems; 5 files; 40 cases; 30 minutes
+- Event journal: correction and replay reconciliation — Event processing; 5 files; 40 cases; 30 minutes

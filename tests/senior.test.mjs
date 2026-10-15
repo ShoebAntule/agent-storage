@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {challenges,publicChallenge} from '../server/challenges.mjs';
+import {allChallenges,publicChallenge} from '../server/challenges.mjs';
+const challenges=allChallenges.filter(c=>c.version===2);
 import {scenarios} from '../server/scenarios.mjs';
 import {evaluate,runCases} from '../server/evaluate.mjs';
 import {packFiles,executable,unpackFiles} from '../server/workspace.mjs';

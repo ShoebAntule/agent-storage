@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync,mkdtempSync,rmSync} from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {transformWithOxc} from 'vite';
+import {projects} from '../server/catalog-v3.mjs';
+import {publicChallenge,allChallenges} from '../server/challenges.mjs';
+import {runCases,evaluate} from '../server/evaluate.mjs';
+import {packFiles,unpackFiles} from '../server/workspace.mjs';
+import {matchesUI} from '../server/ui-assertions.mjs';
+const project=id=>projects.find(c=>c.id==='project-v3-'+id);
+async function output(id,input){const r=await runCases(project(id).reference,[{input,assertUnchanged:true}]);assert.equal(r[0].error,undefined);return r[0].actual;}
+test('30 independent projects, distinct level sets and six real browser workspaces',()=>{
+ assert.equal(projects.length,30);assert.equal(projects.filter(c=>c.runtime==='browser').length,6);
+ for(const d of ['easy','medium','hard']){const group=projects.filter(c=>c.difficulty===d);assert.equal(group.length,10);assert.equal(group.filter(c=>c.runtime==='browser').length,2);}
+ assert.equal(new Set(projects.map(c=>c.title)).size,30);assert.ok(new Set(projects.map(c=>c.entry)).size>=25);
+ for(const c of projects){assert.equal(c.version,3);assert.equal(c.tests.length,40);assert.equal(c.tests.filter(t=>t.hidden).length,38);assert.ok(new Set(c.tests.map(t=>JSON.stringify(t.input))).size===40);assert.equal(publicChallenge(c).tests,undefined);assert.equal(publicChallenge(c).reference,undefined);assert.ok(Object.keys(c.files).length>=5);assert.ok(!Object.hasOwn(c.files,'service.js'));}
+ assert.ok(allChallenges.some(c=>c.id==='senior-checkout-2')); // Existing attempts remain readable.
+});
+test('real helper modules own separate regressions',()=>{for(const [id,file]of [['webhook-inbox','delivery/verify.js'],['invoice-rounding','billing/tax.js'],['balanced-transfer','wallet/accounts.js'],['batched-reads','loader/keys.js'],['csv-delivery','exports/cell.js']]){const c=project(id);assert.notEqual(c.files[file],unpackFiles(c.reference)[file]);}});
+test('webhook rejection does not consume replay ID',async()=>assert.deepEqual(await output('webhook-inbox',{account:'a',secret:'s',events:[{id:'constructor',account:'b',signature:'s',amount:5},{id:'constructor',account:'a',signature:'s',amount:5},{id:'constructor',account:'a',signature:'s',amount:5}]}),{balance:5,results:['rejected','accepted','duplicate']}));
+test('line tax rounds half upwards before invoice aggregation',async()=>assert.deepEqual(await output('invoice-rounding',{taxBps:5000,lines:[{sku:'a',unitCents:1,quantity:1},{sku:'a',unitCents:1,quantity:1}]}),{subtotal:2,tax:2,total:4}));
+test('wallet rejects invalid and insufficient transfers atomically',async()=>assert.deepEqual(await output('balanced-transfer',{balances:{a:5,b:0},transfers:[{from:'a',to:'b',cents:6},{from:'a',to:'a',cents:1},{from:'a',to:'b',cents:5}]}),{balances:{a:0,b:5},results:['insufficient','invalid','ok']}));
+test('redaction preserves falsy values and does not match substrings',async()=>assert.deepEqual(await output('audit-redaction',{tokenCount:0,child:[{TOKEN:'x',enabled:false,empty:''}]}),{tokenCount:0,child:[{TOKEN:'[REDACTED]',enabled:false,empty:''}]}));
+test('refund replays before balance checks and detects payload conflict',async()=>assert.deepEqual(await output('refund-reconciliation',{tenant:'t',currency:'INR',captures:[{id:'a',tenant:'t',currency:'INR',cents:100}],refunds:[{key:'r',captureId:'a',cents:100},{key:'r',captureId:'a',cents:100},{key:'r',captureId:'a',cents:1}]}),{results:['refunded','replayed','conflict'],remaining:{a:0}}));
+test('projection applies buffered gaps and preserves tombstone revision',async()=>assert.deepEqual(await output('order-projection',{tenant:'t',events:[{tenant:'t',id:'a',version:2,op:'delete'},{tenant:'t',id:'a',version:1,op:'set',value:0}]}),{values:{},versions:{a:2}}));
+test('batch reads preserve positional duplicates, falsy payloads and namespace pairs',async()=>assert.deepEqual(await output('batched-reads',{maxBatch:1,rows:[{tenant:'a:b',id:'c',value:false,revision:1},{tenant:'a',id:'b:c',value:0,revision:1}],requests:[{tenant:'a:b',id:'c'},{tenant:'a',id:'b:c'},{tenant:'a:b',id:'c'}]}),{results:[false,0,false],batches:[[{tenant:'a:b',id:'c'}],[{tenant:'a',id:'b:c'}]]}));
+test('CSV protects text formulas without corrupting numeric negatives',async()=>assert.equal(await output('csv-delivery',{columns:[{key:'v',label:'Value'}],rows:[{v:-5},{v:'-5'},{v:'a"b'}]}),'Value\r\n-5\r\n\'-5\r\n"a""b"'));
+test('seat capacity clamp updates controller and DOM without exact styling',async()=>{const r=await output('seat-counter',{capacity:8,initial:2,actions:[{type:'add',qty:5},{type:'capacity',value:3}]});assert.deepEqual(r.state,{count:3,capacity:3,initial:2});assert.match(r.html,/data-action="add" disabled/);assert.ok(matchesUI({...r,html:r.html.replace('Add seats','Reserve now')},r));assert.ok(!matchesUI({...r,html:r.html.replace('data-action="add" disabled','data-action="add"')},r));});
+test('unsafe render insertion is rejected even when controller state matches',async()=>{const r=await output('approval-form',{limit:100,actions:[{type:'edit',field:'name',value:'<img src=x>'},{type:'edit',field:'cents',value:'1'},{type:'submit'}]});assert.ok(!matchesUI({...r,html:r.html.replaceAll('&lt;img src=x&gt;','<img src=x>')},r));});
+test('Full Check sends two public cases and aggregate hidden counts only',async()=>{const c=project('cursor-feed');const r=await evaluate(c,c.reference,{seed:7});assert.equal(r.checks.length,2);assert.deepEqual(r.hiddenSummary,{passed:38,total:38});assert.equal(r.totalChecks,40);assert.deepEqual(r.failedCaseNumbers,[]);});
+test('entry manifest supports nested modules and rejects traversal',async()=>{const code=packFiles({'package.json':'{"main":"app/main.js"}','app/main.js':"const x=require('../lib/value.js');module.exports=()=>x;",'lib/value.js':'module.exports=7;'});assert.equal((await runCases(code,[{input:null}]))[0].actual,7);assert.throws(()=>unpackFiles(packFiles({'solution.js':'module.exports=()=>1','../outside.js':''})));});
+test('AI proposal paths and unlabeled blocks never silently fall back to solution.js',async()=>{const root=path.resolve(import.meta.dirname,'..'),dir=mkdtempSync(path.join(root,'.ui-test-'));try{const js=(await transformWithOxc(readFileSync(path.join(root,'src/workspace.ts'),'utf8'),'workspace.ts')).code;writeFileSync(path.join(dir,'workspace.mjs'),js);const {proposalsOf}=await import(pathToFileURL(path.join(dir,'workspace.mjs')));const r=proposalsOf('```js controllers/cart.js\nmodule.exports=1;\n```\n\n**styles.css**\n```css\nbody{}\n```\n\n```js\nconst x=1;\n```');assert.deepEqual(r.map(p=>p.file),['controllers/cart.js','styles.css',null]);}finally{rmSync(dir,{recursive:true,force:true});}});

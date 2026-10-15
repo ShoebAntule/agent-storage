@@ -13,10 +13,11 @@ test('Senior React journey: signup, file tabs, draft, hidden checks, reasoning a
  dom.window.HTMLElement.prototype.scrollIntoView=function(){};dom.window.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};dom.window.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};
  const {render,screen,waitFor,cleanup}=await import('@testing-library/react');const {default:userEvent}=await import('@testing-library/user-event');const React=await import('react');const user=userEvent.setup({document:dom.window.document});
  const root=path.resolve(import.meta.dirname,'..'),dir=mkdtempSync(path.join(root,'.ui-test-'));
- let source=readFileSync(path.join(root,'src/main.tsx'),'utf8').replace("import './style.css';",'').replace("from './workspace'","from './workspace.mjs'").replace('function App(){','export function App(){').replace("createRoot(document.getElementById('root')!).render(<App/>);",'');
+ let source=readFileSync(path.join(root,'src/main.tsx'),'utf8').replace("import './style.css';",'').replace("from './workspace'","from './workspace.mjs'").replace("from './preview'","from './preview.mjs'").replace('function App(){','export function App(){').replace("createRoot(document.getElementById('root')!).render(<App/>);",'');
  writeFileSync(path.join(dir,'workspace.mjs'),(await transformWithOxc(readFileSync(path.join(root,'src/workspace.ts'),'utf8'),'workspace.ts')).code);
  writeFileSync(path.join(dir,'ui.mjs'),(await transformWithOxc(source,'main.tsx')).code);
- const challenge=publicChallenge(challenges[0]);let authenticated=false,current=null,startBody=null,saveCount=0;
+ writeFileSync(path.join(dir,'preview.mjs'),(await transformWithOxc(readFileSync(path.join(root,'src/preview.ts'),'utf8').replace("from './workspace'","from './workspace.mjs'"),'preview.ts')).code);
+ const challenge=publicChallenge(challenges.find(c=>c.id==='project-v3-seat-counter'));let authenticated=false,current=null,startBody=null,saveCount=0;
  globalThis.fetch=async(url,options={})=>{
   const route=String(url).replace('/api',''),method=options.method||'GET',b=options.body?JSON.parse(options.body):{};
   if(route==='/me')return Response.json(authenticated?{id:'u',name:'Shoeb',email:'test@example.com'}:{error:'Please sign in.'},{status:authenticated?200:401});
@@ -38,10 +39,12 @@ test('Senior React journey: signup, file tabs, draft, hidden checks, reasoning a
   await screen.findByRole('heading',{name:/Your engineering playground/});assert.ok(screen.getByText('30'));
   await user.click(screen.getByRole('button',{name:/Easy/}));await user.click(screen.getByRole('button',{name:'Enter the lab'}));
   await screen.findByRole('heading',{name:challenge.title,level:1});assert.equal(startBody.difficulty,'easy');assert.match(document.querySelector('.timer strong').textContent,/^(09:\d{2}|10:0[01])$/);
-  await user.click(screen.getByRole('button',{name:/RELEASE.md/}));assert.equal(screen.getByLabelText('JavaScript solution editor').readOnly,true);await user.click(screen.getByRole('button',{name:'solution.js'}));assert.ok(screen.getByLabelText('JavaScript solution editor').value.includes('require'));await user.click(screen.getByRole('button',{name:'service.js'}));const editor=screen.getByLabelText('JavaScript solution editor');await user.clear(editor);await user.type(editor,'function solve(input) {{ return 1; }',{skipClick:true});
+  await user.click(screen.getByRole('button',{name:/README.md/}));assert.equal(screen.getByLabelText('JavaScript solution editor').readOnly,true);await user.click(screen.getByRole('button',{name:'app.js'}));assert.ok(screen.getByLabelText('JavaScript solution editor').value.includes('require'));await user.click(screen.getByRole('button',{name:'controllers/seat-counter.js'}));const editor=screen.getByLabelText('JavaScript solution editor');await user.clear(editor);await user.type(editor,'function solve(input) {{ return 1; }',{skipClick:true});
   await waitFor(()=>assert.ok(saveCount>0),{timeout:2000});assert.ok(current.code.includes('function solve'));
   assert.equal(screen.getByLabelText('Message to AI assistant').disabled,true);
-  await user.click(screen.getByRole('button',{name:'Full checks'}));await screen.findByText('40/40 checks passed');assert.ok(screen.getByText('Case 13'));await user.click(screen.getByRole('button',{name:'Run examples'}));await screen.findByText('2/2 examples passed');
+  await user.click(screen.getByRole('button',{name:'Run Preview'}));assert.ok(screen.getByTitle('Challenge live preview'));
+  await user.type(screen.getByLabelText('New file path'),'helpers/extra.js');await user.click(screen.getByRole('button',{name:'+ Add file'}));assert.ok(screen.getByRole('button',{name:'helpers/extra.js'}));
+  await user.click(screen.getByRole('button',{name:'Full checks'}));await screen.findByText('40/40 checks passed');assert.equal(screen.queryByText('Case 13'),null);assert.ok(screen.getByText('hidden checks passed'));await user.click(screen.getByRole('button',{name:'Run examples'}));await screen.findByText('2/2 examples passed');
   await user.click(screen.getByRole('button',{name:'Your reasoning'}));assert.ok(screen.getByRole('button',{name:'Insert review checkpoints'}));await user.type(screen.getByPlaceholderText(/My assumptions/),'I checked the boundaries.');
   await user.click(screen.getByRole('button',{name:'Submit solution'}));await screen.findByRole('dialog');await user.click(screen.getByRole('button',{name:'Submit & evaluate'}));
   await screen.findByText('ASSESSMENT PASSED');assert.equal(current.explanation,'I checked the boundaries.');assert.ok(screen.getByText('100'));assert.equal(current.status,'submitted');

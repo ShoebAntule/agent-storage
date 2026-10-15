@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Isolated challenge preview</title></head>
+<body><p>Starting preview…</p><script>
+addEventListener('message', function receive(event) {
+  if (event.source !== parent || event.data?.type !== 'agent-storage-preview' || typeof event.data.document !== 'string') return;
+  removeEventListener('message', receive);
+  document.open();
+  document.write(event.data.document);
+  document.close();
+});
+</script></body></html>

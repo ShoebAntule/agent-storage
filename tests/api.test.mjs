@@ -1,38 +1,50 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
-import {mkdtempSync,rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import http from 'node:http';
 import path from 'node:path';
-import {DatabaseSync} from 'node:sqlite';
-import {challenges} from '../server/challenges.mjs';
-const root=path.resolve(import.meta.dirname,'..');
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-test('full API workflow, authorization, AI adapter, deadlines and recovery',async t=>{
- const dir=mkdtempSync(path.join(tmpdir(),'agentforge-test-')),dbPath=path.join(dir,'test.sqlite');
- let child,db,base;
- async function launch(provider='openai-compatible'){child=spawn(process.execPath,['--import',path.join(root,'tests/mock-provider.mjs'),path.join(root,'server/index.mjs')],{cwd:root,env:{...process.env,PORT:'0',HOST:'127.0.0.1',DATABASE_PATH:dbPath,AI_PROVIDER:provider,AI_API_KEY:'test-only',AI_MODEL:'test-model',AI_MODELS:'test-model,second-model',AI_BASE_URL:'https://test.invalid/v1',AI_REQUESTS_PER_ATTEMPT:'2'},stdio:['ignore','pipe','pipe']});let output='';base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Server start timed out '+output)),5000);child.stdout.on('data',b=>{output+=b;const m=/http:\/\/127\.0\.0\.1:(\d+)/.exec(output);if(m){clearTimeout(timer);resolve(m[0]);}});child.once('exit',c=>{clearTimeout(timer);reject(new Error('Server exited '+c));});});}
- async function stop(){if(child&&!child.killed){child.kill();await new Promise(r=>child.once('exit',r));}}
- t.after(async()=>{db?.close();await stop();rmSync(dir,{recursive:true,force:true});});
- await launch();db=new DatabaseSync(dbPath);
- async function request(p,method='GET',data,cookie='',headers={}){const r=await fetch(base+'/api'+p,{method,headers:{'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{}),...headers},...(data===undefined?{}:{body:JSON.stringify(data)})});return {status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
- const account={name:'Test Engineer',email:'test@example.com',password:'correct-horse-123'};
- let cookie,attempt;
- await t.test('signup validates inputs and never returns password',async()=>{assert.equal((await request('/auth/signup','POST',{...account,password:'tiny'})).status,400);const r=await request('/auth/signup','POST',account);assert.equal(r.status,201);assert.ok(r.cookie.includes('af_session='));assert.equal(r.body.password,undefined);assert.equal((await request('/auth/signup','POST',account)).status,409);cookie=r.cookie;assert.equal((await request('/me')).status,401);assert.equal((await request('/me','GET',undefined,cookie)).body.name,account.name);});
- await t.test('password storage is hashed and login validates',async()=>{const stored=db.prepare('SELECT password FROM users').get().password;assert.ok(!stored.includes(account.password));assert.equal((await request('/auth/login','POST',{...account,password:'incorrect'})).status,401);assert.equal((await request('/auth/login','POST',account)).status,200);});
- await t.test('request forgery blocked and model secrets hidden',async()=>{const r=await request('/attempts','POST',{difficulty:'easy'},cookie,{Origin:'https://evil.example'});assert.equal(r.status,403);const c=await request('/config','GET',undefined,cookie);assert.equal(c.body.configured,true);assert.equal(c.body.AI_API_KEY,undefined);assert.equal(c.body.models.length,2);});
- await t.test('random attempts obey filters and only one active session exists',async()=>{const r=await request('/attempts','POST',{difficulty:'easy',category:'Authorization & policy',model:'second-model'},cookie);assert.equal(r.status,201);attempt=r.body;assert.equal(attempt.challenge.id,'senior-policy-1');assert.equal(attempt.model,'second-model');assert.equal(attempt.deadline-attempt.started,600000);assert.equal(attempt.challenge.tests,undefined);assert.equal(attempt.challenge.reference,undefined);const second=await request('/attempts','POST',{difficulty:'hard'},cookie);assert.equal(second.body.id,attempt.id);});
- await t.test('another user cannot read, change or export attempt',async()=>{const other=await request('/auth/signup','POST',{...account,email:'other@example.com'});for(const [p,m,b]of [[`/attempts/${attempt.id}`,'GET'],[`/attempts/${attempt.id}/export`,'GET'],[`/attempts/${attempt.id}/draft`,'PUT',{code:'x'}]])assert.equal((await request(p,m,b,other.cookie)).status,404);});
- const correct=challenges.find(c=>c.id===attempt.challenge_id).reference;
- await t.test('drafts use optimistic locking and custom inputs execute',async()=>{const r=await request(`/attempts/${attempt.id}/draft`,'PUT',{code:correct,explanation:'Checked input types.',revision:0,snapshot:true},cookie);assert.equal(r.status,200);assert.equal(r.body.revision,1);assert.equal((await request(`/attempts/${attempt.id}/draft`,'PUT',{code:'stale',revision:0},cookie)).status,409);const run=await request(`/attempts/${attempt.id}/examples`,'POST',{code:correct},cookie);assert.equal(run.body.score,100);const probe=await request(`/attempts/${attempt.id}/probe`,'POST',{code:correct,input:{actor:{tenant:'t',roles:['admin']},resource:{tenant:'other',path:'/x'},action:'read',now:0,rules:[{effect:'allow',role:'admin',action:'*',path:'/x'}]}},cookie);assert.equal(probe.body.actual,false);});
- await t.test('full practice checks return only numbered hidden verdicts and keep attempt editable',async()=>{const r=await request(`/attempts/${attempt.id}/check`,'POST',{code:correct},cookie);assert.equal(r.status,200);assert.equal(r.body.totalChecks,40);assert.equal(r.body.score,100);assert.equal(r.body.checks.filter(c=>c.hidden).length,38);for(const c of r.body.checks.filter(c=>c.hidden))assert.deepEqual(Object.keys(c).sort(),['caseNumber','hidden','name','passed']);assert.equal((await request('/attempts/'+attempt.id,'GET',undefined,cookie)).body.status,'active');});
- await t.test('AI request recorded without applying replacement; request cap enforced',async()=>{const route=`/attempts/${attempt.id}/chat`;const r=await request(route,'POST',{message:'Explain this code.'},cookie);assert.equal(r.status,200);assert.ok(r.body.answer.includes('function solve'));assert.equal(db.prepare('SELECT code FROM attempts WHERE id=?').get(attempt.id).code,correct);assert.equal((await request(route,'POST',{message:'Explain edge cases.'},cookie)).status,200);assert.equal((await request(route,'POST',{message:'Again.'},cookie)).status,429);});
- async function waitForReport(id){for(let i=0;i<100;i++){const r=await request('/attempts/'+id,'GET',undefined,cookie);if(r.body.status==='submitted')return r.body;await sleep(100);}throw new Error('Timed out waiting for report');}
- await t.test('submission freezes code, executes checks and preserves conversation',async()=>{const r=await request(`/attempts/${attempt.id}/submit`,'POST',{code:correct,explanation:'Verified boundaries and strict types.',revision:1},cookie);assert.equal(r.status,200);const final=await waitForReport(attempt.id);assert.equal(final.report.score,100);assert.equal(final.messages.length,4);assert.ok(final.report.checks.filter(c=>c.hidden).every(c=>c.input===undefined&&c.expected===undefined&&c.actual===undefined));assert.equal((await request(`/attempts/${attempt.id}/draft`,'PUT',{code:'x',revision:2},cookie)).status,409);const twice=await request(`/attempts/${attempt.id}/submit`,'POST',{code:'x'},cookie);assert.equal(twice.body.code,correct);});
- await t.test('medium/hard durations and auto-submission without client connection',async()=>{const r=await request('/attempts','POST',{difficulty:'medium'},cookie);assert.equal(r.body.deadline-r.body.started,1200000);db.prepare('UPDATE attempts SET deadline=? WHERE id=?').run(Date.now()-1,r.body.id);await sleep(1800);assert.equal(db.prepare('SELECT status FROM attempts WHERE id=?').get(r.body.id).status,'submitted');const final=await waitForReport(r.body.id);assert.equal(final.reason,'timeout');const hard=await request('/attempts','POST',{difficulty:'hard'},cookie);assert.equal(hard.body.deadline-hard.body.started,1800000);db.prepare('UPDATE attempts SET deadline=? WHERE id=?').run(Date.now()-1,hard.body.id);await waitForReport(hard.body.id);});
- await t.test('expired submission cannot replace saved draft',async()=>{const r=await request('/attempts','POST',{difficulty:'easy'},cookie);const before=r.body.code;db.prepare('UPDATE attempts SET deadline=? WHERE id=?').run(Date.now()-1,r.body.id);const submitted=await request(`/attempts/${r.body.id}/submit`,'POST',{code:'function solve(){return "late";}',revision:0},cookie);assert.equal(submitted.body.code,before);await waitForReport(r.body.id);});
- await t.test('records persist after backend restart and interrupted jobs recover',async()=>{const r=await request('/attempts','POST',{difficulty:'hard'},cookie);db.prepare("UPDATE attempts SET status='evaluating',reason='manual' WHERE id=?").run(r.body.id);await stop();await launch();const recovered=await waitForReport(r.body.id);assert.equal(recovered.status,'submitted');assert.equal((await request('/me','GET',undefined,cookie)).status,200);assert.ok((await request('/attempts','GET',undefined,cookie)).body.length>=4);});
- await t.test('provider failures are explicit and do not fabricate messages',async()=>{const r=await request('/attempts','POST',{difficulty:'easy'},cookie);const response=await request(`/attempts/${r.body.id}/chat`,'POST',{message:'__provider_error__'},cookie);assert.equal(response.status,502);assert.ok(response.body.error.includes('429'));const fresh=await request('/attempts/'+r.body.id,'GET',undefined,cookie);assert.equal(fresh.body.messages.length,0);assert.equal(fresh.body.ai_count,1);});
- await t.test('Gemini adapter uses supported request and response shape',async()=>{await stop();await launch('gemini');const active=(await request('/attempts','GET',undefined,cookie)).body.find(x=>x.status==='active');const response=await request(`/attempts/${active.id}/chat`,'POST',{message:'Explain the contract.'},cookie);assert.equal(response.status,200);assert.equal(response.body.answer,'Gemini adapter test response.');});
- await t.test('logout revokes session',async()=>{assert.equal((await request('/auth/logout','POST',{},cookie)).status,200);assert.equal((await request('/me','GET',undefined,cookie)).status,401);});
+import test from 'node:test';
+import {mkdtempSync,copyFileSync,writeFileSync,rmSync,readdirSync,readFileSync} from 'node:fs';
+import {pathToFileURL} from 'node:url';
+import assert from 'node:assert/strict';
+const project=path.resolve(import.meta.dirname,'..'),dir=mkdtempSync(project+'/.postgres-test-');
+for(const f of readdirSync(project+'/server').filter(f=>f.endsWith('.mjs')||f.endsWith('.json')))if(f!=='db.mjs')copyFileSync(project+'/server/'+f,dir+'/'+f);
+writeFileSync(dir+'/db.mjs',`
+import {PGlite} from '@electric-sql/pglite';
+export const engine=new PGlite();
+await engine.exec(\`CREATE SCHEMA app_private;
+CREATE TABLE app_private.users(id TEXT PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,created BIGINT);
+CREATE TABLE app_private.sessions(token TEXT PRIMARY KEY,user_id TEXT REFERENCES app_private.users(id),expires BIGINT);
+CREATE TABLE app_private.attempts(id TEXT PRIMARY KEY,user_id TEXT REFERENCES app_private.users(id),challenge_id TEXT,version INTEGER,difficulty TEXT,started BIGINT,deadline BIGINT,status TEXT,code TEXT,explanation TEXT DEFAULT '',report TEXT,reason TEXT,ai_count INTEGER DEFAULT 0,model TEXT,revision INTEGER DEFAULT 0);
+CREATE TABLE app_private.messages(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,attempt_id TEXT REFERENCES app_private.attempts(id),role TEXT,content TEXT,created BIGINT);
+CREATE TABLE app_private.snapshots(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,attempt_id TEXT REFERENCES app_private.attempts(id),code TEXT,created BIGINT);\`);
+function adapter(client){const sql=async(parts,...values)=>{const query=parts.reduce((s,p,i)=>s+(i?'$'+i:'')+p,'');if(query.includes('pg_advisory_xact_lock'))return [];return (await client.query(query,values)).rows;};sql.unsafe=async(q,args)=> (await client.query(q,args)).rows;sql.begin=cb=>engine.transaction(tx=>cb(adapter(tx)));return sql;}
+export const sql=adapter(engine);
+export function normalizeRow(row){if(!row)return;const r={...row};for(const k of ['created','started','deadline','expires','version','revision','ai_count'])if(r[k]!=null)r[k]=Number(r[k]);return r;}
+`);
+test('Supabase-compatible PostgreSQL API and Vercel request grading',async()=>{
+process.env.VERCEL='1';process.env.AI_PROVIDER='openai-compatible';process.env.AI_API_KEY='test-only';process.env.AI_MODEL='mock';process.env.AI_BASE_URL='https://test.invalid/v1';
+const nativeFetch=globalThis.fetch;globalThis.fetch=(url,options)=>String(url).startsWith('https://test.invalid')?Promise.resolve(Response.json({choices:[{message:{content:'hello'}}]})):nativeFetch(url,options);
+let server,engine;
+try{
+ writeFileSync(dir+'/entry.mjs',readFileSync(project+'/api/index.mjs','utf8').replace('../server/index.mjs','./index.mjs'));
+ const {default:entry}=await import(pathToFileURL(dir+'/entry.mjs'));server=http.createServer(entry);({engine}=await import(pathToFileURL(dir+'/db.mjs')));const {challenges}=await import(pathToFileURL(dir+'/challenges.mjs'));
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
+ const previewHost=await fetch(base+'/preview-host.html');assert.equal(previewHost.status,200);assert.equal(previewHost.headers.get('x-frame-options'),null);assert.match(previewHost.headers.get('content-security-policy'),/sandbox allow-scripts/);
+ let cookie='';async function api(p,method='GET',data){const r=await fetch(base+'/api/index?route='+encodeURIComponent(p.replace(/^\//,'')),{method,headers:{'Content-Type':'application/json',Cookie:cookie},...(data?{body:JSON.stringify(data)}:{})});const body=await r.json();return {status:r.status,body,cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ const signup=await api('/auth/signup','POST',{name:'Migration Test',email:'migration@example.com',password:'testing-migration-123'});assert.equal(signup.status,201,JSON.stringify(signup));cookie=signup.cookie;
+ assert.equal((await api('/me')).body.name,'Migration Test');
+ assert.equal((await api('/auth/signup','POST',{name:'Migration Test',email:'migration@example.com',password:'testing-migration-123'})).status,409);
+ assert.equal((await api('/config')).body.counts.hard,10);
+ const started=await api('/attempts','POST',{difficulty:'easy',category:'UI & rendering',model:'mock'});assert.equal(started.status,201,JSON.stringify(started));const a=started.body;const ownerCookie=cookie;const other=await api('/auth/signup','POST',{name:'Other Engineer',email:'other@example.com',password:'testing-migration-123'});cookie=other.cookie;assert.equal((await api('/attempts/'+a.id)).status,404);cookie=ownerCookie;assert.equal(typeof a.deadline,'number');const correct=challenges.find(c=>c.id===a.challenge_id).reference;
+ const draft=await api('/attempts/'+a.id+'/draft','PUT',{code:correct,explanation:'Migration test.',revision:0,snapshot:true});assert.equal(draft.status,200,JSON.stringify(draft));assert.equal(draft.body.revision,1);
+ const examples=await api('/attempts/'+a.id+'/examples','POST',{code:correct});assert.equal(examples.body.score,100);
+ const full=await api('/attempts/'+a.id+'/check','POST',{code:correct});assert.equal(full.body.totalChecks,40);assert.equal(full.body.score,100);assert.equal(full.body.checks.length,2);assert.deepEqual(full.body.hiddenSummary,{passed:38,total:38});
+ assert.equal((await api('/attempts/'+a.id+'/chat','POST',{message:'Hello'})).body.answer,'hello');
+ const submitted=await api('/attempts/'+a.id+'/submit','POST',{code:correct,explanation:'Verified.',revision:1});assert.equal(submitted.status,200,JSON.stringify(submitted));
+ let final;for(let n=0;n<50;n++){const r=await api('/attempts/'+a.id);if(r.body.status==='submitted'){final=r.body;break;}await new Promise(r=>setTimeout(r,100));}assert.equal(final.report.score,100);assert.equal(final.messages.length,2);
+ assert.equal((await api('/attempts/'+a.id+'/draft','PUT',{code:'bad',revision:2})).status,409);
+ const second=await api('/attempts','POST',{difficulty:'hard'});await engine.query('UPDATE app_private.attempts SET deadline=$1 WHERE id=$2',[Date.now()-1,second.body.id]);await api('/attempts/'+second.body.id);let timeout;for(let n=0;n<50;n++){const r=await api('/attempts/'+second.body.id);if(r.body.status==='submitted'){timeout=r.body;break;}await new Promise(r=>setTimeout(r,100));}assert.equal(timeout.reason,'timeout');
+ assert.equal((await api('/attempts')).body.length,2);
+ await api('/auth/logout','POST',{});assert.equal((await api('/me')).status,401);
+ console.log('PASS: PostgreSQL engine integration: signup/session, private schema queries, row normalization, assignment, snapshots/revisions, examples, 40-case checks, AI adapter, immutable submission, queue claim, timeout grading, history and logout.');
+}finally{if(server)await new Promise(r=>server.close(r));if(engine)await engine.close();rmSync(dir,{recursive:true,force:true});}
+
 });
