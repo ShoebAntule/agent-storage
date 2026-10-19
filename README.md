@@ -1,4 +1,4 @@
-# Agent Storage — Project Lab 3
+# AgentBench — Project Lab 3
 
 AI-assisted engineering practice with 30 independent challenges, Supabase-backed accounts and attempts, timed submissions, isolated grading, and six live HTML/CSS/JavaScript previews.
 
